@@ -1,0 +1,137 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+import numpy as np
+
+# Função para pegar os dados do Yahoo Finance
+@st.cache_data
+def pegar_dados_yahoo(tickers):
+    dados = {}
+    for ticker in tickers:
+        try:
+            dados[ticker] = yf.download(ticker, period="1y")  # Pegando 1 ano de dados
+            if dados[ticker].empty:
+                st.warning(f"Nenhum dado encontrado para {ticker} no Yahoo Finance.")
+        except Exception as e:
+            st.error(f"Erro ao baixar dados para {ticker} no Yahoo Finance: {e}")
+    return dados
+
+# Função para calcular métricas
+def calcular_metricas(df):
+    # Calcular Retorno Diário e Retorno Acumulado
+    df['Retorno_Diario'] = df['Adj Close'].pct_change()
+    df['Retorno_Acumulado'] = (1 + df['Retorno_Diario']).cumprod() - 1
+
+    # Calcular médias móveis
+    df['Media_Movel_50'] = df['Adj Close'].rolling(window=50).mean()
+    df['Media_Movel_200'] = df['Adj Close'].rolling(window=200).mean()
+
+    # Calcular volatilidade anualizada (30 dias)
+    df['Volatilidade'] = df['Retorno_Diario'].rolling(window=30).std() * np.sqrt(252)
+
+    return df
+
+# Função para determinar a tendência de crescimento e os percentuais de crescimento/queda
+def analisar_tendencia(df):
+    if df['Media_Movel_50'].iloc[-1] > df['Media_Movel_200'].iloc[-1]:
+        crescimento_percentual = (df['Media_Movel_50'].iloc[-1] / df['Media_Movel_200'].iloc[-1] - 1) * 100
+        return "Crescimento", "⬆️", crescimento_percentual
+    else:
+        queda_percentual = (1 - df['Media_Movel_50'].iloc[-1] / df['Media_Movel_200'].iloc[-1]) * 100
+        return "Queda", "⬇️", queda_percentual
+
+# Função para exibir gráficos interativos com Plotly
+def exibir_graficos(ticker, df):
+    st.subheader(f"Análise de {ticker}")
+
+    # Gráfico de Preço Ajustado com Médias Móveis
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Adj Close'], mode='lines', name='Preço Ajustado', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=df.index, y=df['Media_Movel_50'], mode='lines', name='Média Móvel 50 dias', line=dict(color='orange')))
+    fig.add_trace(go.Scatter(x=df.index, y=df['Media_Movel_200'], mode='lines', name='Média Móvel 200 dias', line=dict(color='green')))
+    fig.update_layout(title=f'Preço Ajustado e Médias Móveis - {ticker}', xaxis_title='Data', yaxis_title='Preço')
+    st.plotly_chart(fig)
+
+    # Gráfico de Retorno Acumulado
+    fig_retorno = go.Figure()
+    fig_retorno.add_trace(go.Scatter(x=df.index, y=df['Retorno_Acumulado'], mode='lines', name='Retorno Acumulado', line=dict(color='purple')))
+    fig_retorno.update_layout(title=f'Retorno Acumulado - {ticker}', xaxis_title='Data', yaxis_title='Retorno Acumulado')
+    st.plotly_chart(fig_retorno)
+
+    # Gráfico de Volatilidade
+    fig_volatilidade = go.Figure()
+    fig_volatilidade.add_trace(go.Scatter(x=df.index, y=df['Volatilidade'], mode='lines', name='Volatilidade (Anualizada)', line=dict(color='red')))
+    fig_volatilidade.update_layout(title=f'Volatilidade (Anualizada) - {ticker}', xaxis_title='Data', yaxis_title='Volatilidade')
+    st.plotly_chart(fig_volatilidade)
+
+    # Gráfico de Distribuição dos Retornos Diários
+    fig_distribuicao = px.histogram(df, x='Retorno_Diario', nbins=50, title=f'Distribuição dos Retornos Diários - {ticker}')
+    st.plotly_chart(fig_distribuicao)
+
+# Função para recomendar a compra ou não
+def recomendar_compra(ticker, df):
+    # Exibir o preço mais recente
+    ultimo_preco = df['Adj Close'].iloc[-1]
+    st.write(f"**Preço mais recente de {ticker}:** ${ultimo_preco:.2f}")
+    
+    # Determina a tendência e exibe a recomendação
+    tendencia, seta, percentual = analisar_tendencia(df)
+
+    if tendencia == "Crescimento":
+        if df['Volatilidade'].iloc[-1] < 0.3:  # Se a volatilidade for moderada
+            st.success(f"{seta} **Recomendação:** {ticker} está em **Crescimento** ({percentual:.2f}% de crescimento). Pode ser um bom momento para comprar, volatilidade moderada.")
+        else:
+            st.warning(f"{seta} **Recomendação:** {ticker} está em **Crescimento** ({percentual:.2f}% de crescimento), mas a volatilidade está alta ({df['Volatilidade'].iloc[-1]:.2%}). Considere o risco.")
+    else:
+        st.error(f"{seta} **Recomendação:** {ticker} está em **Queda** ({percentual:.2f}% de queda). Não é um bom momento para comprar.")
+
+# Função principal para montar a interface no Streamlit
+def main():
+    st.set_page_config(page_title="Análise de Investimentos", layout="wide")
+
+    st.title("Análise de Investimentos com Yahoo Finance")
+    st.markdown("""
+    Esta aplicação fornece uma análise de crescimento ou queda de ações e criptomoedas, com base em dados do Yahoo Finance. 
+    Além disso, é exibido o preço mais recente e uma recomendação de compra ou não, com base nas tendências e volatilidade.
+    """)
+
+    # Lista de empresas a serem analisadas
+    tickers_lista = [
+        'NIO', 'SQ', 'PLTR', 'DKNG', 'ROKU', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'TSLA', 'NVDA', 'JNJ'
+    ]
+    
+    # Caixa de seleção para escolher os ativos
+    tickers_acoes = st.sidebar.multiselect("Selecione os códigos de ações", tickers_lista, default=tickers_lista)
+    
+    # Campo de pesquisa para criptomoedas
+    tickers_crypto = st.sidebar.text_input("Digite os códigos de criptomoedas (separados por vírgula)", "BTC-USD, ETH-USD")
+
+    tickers_crypto = [ticker.strip().upper() for ticker in tickers_crypto.split(',')]
+
+    if st.sidebar.button("Analisar"):
+        st.title("Análise Comparativa das Ações Selecionadas")
+
+        # Pega os dados das ações e criptomoedas do Yahoo
+        dados_yahoo = pegar_dados_yahoo(tickers_acoes + tickers_crypto)
+
+        for ticker in tickers_acoes + tickers_crypto:
+            df = dados_yahoo.get(ticker, pd.DataFrame())
+            
+            if df.empty:
+                st.warning(f"Não foi possível encontrar dados para {ticker}.")
+                continue
+
+            # Calcula métricas e exibe gráficos
+            df = calcular_metricas(df)
+
+            # Exibe as métricas e gráficos
+            exibir_graficos(ticker, df)
+
+            # Recomendação de compra
+            recomendar_compra(ticker, df)
+
+# Rodando a aplicação no Streamlit
+if __name__ == '__main__':
+    main()
